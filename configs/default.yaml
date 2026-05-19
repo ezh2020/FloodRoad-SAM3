@@ -1,0 +1,95 @@
+paths:
+  raw_root: /content/spacenet8/raw
+  processed_root: /content/spacenet8/processed
+  output_dir: /content/floodroad_runs/default
+
+inputs:
+  # Used only when --pairs-csv is not provided to data/preprocess.py.
+  pre_glob: "**/*pre*.tif"
+  post_glob: "**/*post*.tif"
+  road_geojson_glob: "**/*road*.geojson"
+  flood_label_glob: "**/*flood*.tif"
+
+data:
+  tile_size: 1024
+  overlap: 128
+  default_road_width_px: 8
+  road_buffer_px: 16
+  flood_threshold: 0.5
+  train_ratio: 0.8
+  split_seed: 42
+  rl_sample_limit: 20
+  batch_size_deeplab: 4
+  batch_size_ours: 1
+  num_workers: 2
+  normalize_mean: [0.485, 0.456, 0.406]
+  normalize_std: [0.229, 0.224, 0.225]
+
+sam3:
+  backend: auto
+  checkpoint: null
+  model_type: null
+  prompt: flooded road
+  device: cuda
+  allow_mock: false
+
+deeplab:
+  epochs: 100
+  lr: 0.0001
+  weight_decay: 0.00001
+  batch_size: 4
+  pretrained_backbone: true
+
+ours:
+  phase1_epochs: 30
+  phase2_epochs: 20
+  batch_size: 1
+  lr_lora: 0.00001
+  lr_head: 0.0001
+  lr_policy: 0.0001
+  weight_decay: 0.00001
+  freeze_lora_in_rl: true
+  loss_seg_weight_phase2: 0.1
+
+  dca:
+    k_pos: 8
+    k_neg: 4
+    patch_size: 64
+    text_pos: road obstructed by water
+    text_neg: road still passable
+
+  lora:
+    enabled: true
+    rank: 8
+    alpha: 16
+    dropout: 0.05
+    target_keywords: [q_proj, k_proj, v_proj, out_proj, qkv, proj]
+
+  rgstm:
+    enabled: true
+    merge_ratio: 0.2
+    layers: [6, 12, 18]
+    laplacian_k: 16
+    preserve_weights:
+      energy: 0.4
+      laplacian: 0.4
+      edge: 0.2
+
+  ccrl:
+    state_dim: 12
+    hidden_dim: 256
+    num_actions: 3
+    reachability_pairs: 50
+    reward_weights:
+      local: 1.0
+      reach: 0.6
+      inconsistency: 0.3
+      uncertain: 0.1
+
+eval:
+  threshold: 0.5
+  batch_size: 1
+  warmup: 10
+  iterations: 50
+  use_rl_samples: true
+  gpu_name: auto

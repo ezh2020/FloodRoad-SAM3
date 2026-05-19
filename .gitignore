@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+runs/
+outputs/
+*.pt
+*.pth
+*.ckpt
+*.npy
+*.npz
+*.csv
+*.md.tmp
