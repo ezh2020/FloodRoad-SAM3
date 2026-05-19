@@ -30,8 +30,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--methods",
         nargs="+",
+        default=None,
+        choices=["deeplab", "sam_text", "ours_no_tm", "ours_tm"],
+        help="Legacy shortcut: evaluate the same method list for both accuracy and efficiency tables.",
+    )
+    parser.add_argument(
+        "--accuracy-methods",
+        nargs="+",
         default=["deeplab", "sam_text", "ours_tm"],
         choices=["deeplab", "sam_text", "ours_no_tm", "ours_tm"],
+        help="Methods for Table 1. Defaults to DeepLabV3+, SAM3 text-only, and Ours-TM.",
+    )
+    parser.add_argument(
+        "--efficiency-methods",
+        nargs="+",
+        default=["deeplab", "sam_text", "ours_no_tm", "ours_tm"],
+        choices=["deeplab", "sam_text", "ours_no_tm", "ours_tm"],
+        help="Methods for Table 2. Defaults to all four experiment configurations.",
     )
     parser.add_argument("--use-rl-samples", action="store_true", help="Evaluate on saved 20 RL sample ids")
     parser.add_argument("--split", default="val", choices=["train", "val", "all"])
@@ -238,14 +253,24 @@ def main() -> None:
     ids = sample_ids_for_eval(cfg, output_dir, use_rl)
     loader = make_eval_loader(cfg, ids=ids, split=args.split)
 
+    accuracy_methods = args.methods if args.methods is not None else args.accuracy_methods
+    efficiency_methods = args.methods if args.methods is not None else args.efficiency_methods
+
     accuracy_rows: List[Dict[str, object]] = []
     efficiency_rows: List[Dict[str, object]] = []
-    for method in args.methods:
+    for method in accuracy_methods:
+        if args.skip_accuracy or args.efficiency_only:
+            continue
         model = load_method(method, cfg, device, output_dir)
-        if not args.skip_accuracy and not args.efficiency_only:
-            accuracy_rows.append(evaluate_accuracy(method, model, loader, cfg, device))
-        if not args.skip_efficiency:
-            efficiency_rows.append(measure_efficiency(method, model, loader, cfg, device))
+        accuracy_rows.append(evaluate_accuracy(method, model, loader, cfg, device))
+        del model
+
+    for method in efficiency_methods:
+        if args.skip_efficiency:
+            continue
+        model = load_method(method, cfg, device, output_dir)
+        efficiency_rows.append(measure_efficiency(method, model, loader, cfg, device))
+        del model
 
     if accuracy_rows:
         write_outputs(output_dir, "accuracy_table", accuracy_rows, ACCURACY_COLUMNS)

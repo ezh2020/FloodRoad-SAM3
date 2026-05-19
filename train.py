@@ -75,7 +75,7 @@ def train_deeplab(cfg: Dict, args: argparse.Namespace, device: torch.device, out
     if args.resume:
         model.load_state_dict(torch.load(args.resume, map_location=device)["model"])
     epochs = 1 if args.smoke else int(cfg["deeplab"].get("epochs", 100))
-    batch_size = 1 if args.smoke else int(cfg["deeplab"].get("batch_size", cfg["data"].get("batch_size_deeplab", 4)))
+    batch_size = 2 if args.smoke else int(cfg["deeplab"].get("batch_size", cfg["data"].get("batch_size_deeplab", 4)))
     loader = make_loader(cfg, split="train", batch_size=batch_size, shuffle=True)
     opt = torch.optim.Adam(model.parameters(), lr=float(cfg["deeplab"].get("lr", 1e-4)), weight_decay=float(cfg["deeplab"].get("weight_decay", 1e-5)))
     loss_fn = BCEDiceLoss()

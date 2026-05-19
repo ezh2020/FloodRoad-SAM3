@@ -2,6 +2,9 @@
 
 Colab-friendly code for flooded-road segmentation experiments on SpaceNet 8.
 
+Open the runner notebook in Colab after pushing the repo:
+[FloodRoad_SAM3_Colab.ipynb](FloodRoad_SAM3_Colab.ipynb).
+
 The project implements the four experiment configurations from the plan:
 
 - `deeplab`: DeepLabV3+ style supervised baseline using `torchvision.models.segmentation.deeplabv3_resnet50`.
@@ -9,7 +12,7 @@ The project implements the four experiment configurations from the plan:
 - `ours_no_tm`: FloodRoad-SAM3 with DCA, road prior filtering, LoRA hooks, and CC-RL.
 - `ours_tm`: the same model with RG-STM token merging enabled.
 
-The SAM3 wrapper is intentionally isolated in [models/sam3_baseline.py](/Users/ezh/Documents/codes/sam3/floodroad-sam3/models/sam3_baseline.py). Official SAM3 APIs have changed across releases, so the adapter tries common package layouts and fails with a clear integration message if the installed package exposes a different entry point. For smoke tests only, set `sam3.allow_mock: true`; do not use the mock backend for reported results.
+The SAM3 wrapper is intentionally isolated in [models/sam3_baseline.py](models/sam3_baseline.py). Official SAM3 APIs have changed across releases, so the adapter tries common package layouts and fails with a clear integration message if the installed package exposes a different entry point. For smoke tests only, set `sam3.allow_mock: true`; do not use the mock backend for reported results.
 
 ## Typical Colab Flow
 
