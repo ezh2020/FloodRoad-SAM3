@@ -62,13 +62,14 @@ class FloodRoadSAM3(nn.Module):
         road_mask = batch["road_mask"]
         road_buffer = batch["road_buffer"]
         features = self.sam.encode_image(post)
+        pre_features = self.sam.encode_image(pre)
         if self.use_token_merging:
             if post.shape[0] != 1:
                 raise ValueError("Token merging path expects batch size 1")
             features, merge_state = self.rgstm(features, batch["segment_map"], batch["graph"][0], batch["post_raw"])
         else:
             merge_state = None
-        logits, aux = self.dca(post, pre, road_mask, road_buffer, post_features=features)
+        logits, aux = self.dca(post, pre, road_mask, road_buffer, post_features=features, pre_features=pre_features)
         aux["merge_state"] = merge_state
         return logits, aux
 

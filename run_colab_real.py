@@ -26,7 +26,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-ours-no-tm", action="store_true")
     parser.add_argument("--skip-ours-tm", action="store_true")
     parser.add_argument("--skip-sam3-install", action="store_true")
-    parser.add_argument("--download-prefix", default="spacenet8/")
+    parser.add_argument("--download-prefix", default="spacenet/SN8_floods/")
+    parser.add_argument("--sn8-location", default="Louisiana-East_Training_Public")
+    parser.add_argument("--sn8-tarball", default="Louisiana-East_Training_Public.tar.gz")
+    parser.add_argument("--limit-records", type=int, default=32, help="Limit official SN8 source images while keeping real data.")
+    parser.add_argument("--deeplab-epochs", type=int, default=None)
+    parser.add_argument("--ours-phase1-epochs", type=int, default=None)
+    parser.add_argument("--ours-phase2-epochs", type=int, default=None)
     return parser.parse_args()
 
 
@@ -51,6 +57,14 @@ def write_runtime_config(cfg: dict, args: argparse.Namespace) -> Path:
     cfg["sam3"]["device"] = "cuda"
     cfg["eval"] = dict(cfg.get("eval", {}))
     cfg["eval"]["use_rl_samples"] = True
+    cfg["deeplab"] = dict(cfg.get("deeplab", {}))
+    cfg["ours"] = dict(cfg.get("ours", {}))
+    if args.deeplab_epochs is not None:
+        cfg["deeplab"]["epochs"] = args.deeplab_epochs
+    if args.ours_phase1_epochs is not None:
+        cfg["ours"]["phase1_epochs"] = args.ours_phase1_epochs
+    if args.ours_phase2_epochs is not None:
+        cfg["ours"]["phase2_epochs"] = args.ours_phase2_epochs
     out = Path(args.output_dir) / "real_run.yaml"
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
@@ -101,7 +115,7 @@ def processed_manifest_exists(processed_root: str) -> bool:
 
 def raw_data_exists(raw_root: str) -> bool:
     root = Path(raw_root)
-    return root.exists() and any(root.rglob("*.tif")) and any(root.rglob("*.geojson"))
+    return root.exists() and any(root.rglob("*.tif")) and (any(root.rglob("*.geojson")) or any(root.rglob("*_reference.csv")))
 
 
 def ensure_data(args: argparse.Namespace, config_path: Path) -> None:
@@ -113,21 +127,40 @@ def ensure_data(args: argparse.Namespace, config_path: Path) -> None:
             raise RuntimeError(f"No processed manifest and no raw SpaceNet 8 data found at {args.raw_root}.")
         if shutil.which("aws") is None:
             run([sys.executable, "-m", "pip", "install", "-q", "awscli"])
-        run([sys.executable, "data/download.py", "--output", args.raw_root, "--prefix", args.download_prefix])
+        if args.sn8_tarball:
+            run([sys.executable, "data/download.py", "--output", args.raw_root, "--tarball", args.sn8_tarball, "--extract"])
+        else:
+            run([sys.executable, "data/download.py", "--output", args.raw_root, "--prefix", args.download_prefix])
     if args.skip_preprocess:
         raise RuntimeError(f"Preprocess was skipped but {args.processed_root}/manifest.jsonl does not exist.")
-    cmd = [
-        sys.executable,
-        "data/preprocess.py",
-        "--config",
-        str(config_path),
-        "--raw-root",
-        args.raw_root,
-        "--processed-root",
-        args.processed_root,
-    ]
     if args.pairs_csv:
-        cmd += ["--pairs-csv", args.pairs_csv]
+        cmd = [
+            sys.executable,
+            "data/preprocess.py",
+            "--config",
+            str(config_path),
+            "--raw-root",
+            args.raw_root,
+            "--processed-root",
+            args.processed_root,
+            "--pairs-csv",
+            args.pairs_csv,
+        ]
+    else:
+        cmd = [
+            sys.executable,
+            "data/preprocess_sn8.py",
+            "--config",
+            str(config_path),
+            "--raw-root",
+            args.raw_root,
+            "--processed-root",
+            args.processed_root,
+            "--location",
+            args.sn8_location,
+            "--limit-records",
+            str(args.limit_records),
+        ]
     run(cmd)
 
 

@@ -43,6 +43,7 @@ class DifferentialConceptAnchor(nn.Module):
         road_mask: torch.Tensor,
         road_buffer: torch.Tensor,
         post_features: torch.Tensor | None = None,
+        pre_features: torch.Tensor | None = None,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         b, _, h, w = post_image.shape
         if post_features is None:
@@ -50,16 +51,28 @@ class DifferentialConceptAnchor(nn.Module):
         if post_features.ndim != 4:
             raise ValueError("DCA expects 4D image feature maps from the SAM3 adapter")
 
-        patches_pos, patches_neg = [], []
-        for i in range(b):
-            patches_pos.append(sample_patches(pre_image[i], road_mask[i, 0], self.k_pos, self.patch_size))
-            neg_mask = estimate_water_like_mask(pre_image[i], road_mask[i, 0])
-            patches_neg.append(sample_patches(pre_image[i], neg_mask, self.k_neg, self.patch_size))
-        pos = torch.cat(patches_pos, dim=0)
-        neg = torch.cat(patches_neg, dim=0)
-
-        pos_emb = self.sam.encode_patch_embedding(pos)
-        neg_emb = self.sam.encode_patch_embedding(neg)
+        if pre_features is not None:
+            pos_embs, neg_embs = [], []
+            for i in range(b):
+                neg_mask = estimate_water_like_mask(pre_image[i], road_mask[i, 0])
+                pos_embs.append(
+                    sample_feature_embeddings(pre_features[i], road_mask[i, 0], self.k_pos, self.patch_size, (h, w))
+                )
+                neg_embs.append(
+                    sample_feature_embeddings(pre_features[i], neg_mask, self.k_neg, self.patch_size, (h, w))
+                )
+            pos_emb = torch.cat(pos_embs, dim=0)
+            neg_emb = torch.cat(neg_embs, dim=0)
+        else:
+            patches_pos, patches_neg = [], []
+            for i in range(b):
+                patches_pos.append(sample_patches(pre_image[i], road_mask[i, 0], self.k_pos, self.patch_size))
+                neg_mask = estimate_water_like_mask(pre_image[i], road_mask[i, 0])
+                patches_neg.append(sample_patches(pre_image[i], neg_mask, self.k_neg, self.patch_size))
+            pos = torch.cat(patches_pos, dim=0)
+            neg = torch.cat(patches_neg, dim=0)
+            pos_emb = self.sam.encode_patch_embedding(pos)
+            neg_emb = self.sam.encode_patch_embedding(neg)
 
         feature_map = F.normalize(post_features, dim=1)
         pos_emb = match_dim(pos_emb, feature_map.shape[1])
@@ -106,6 +119,41 @@ def sample_patches(image: torch.Tensor, mask: torch.Tensor, count: int, patch_si
         x = int(yx[1].item())
         patches.append(padded[:, y : y + patch_size, x : x + patch_size])
     return torch.stack(patches, dim=0)
+
+
+def sample_feature_embeddings(
+    feature: torch.Tensor,
+    mask: torch.Tensor,
+    count: int,
+    patch_size: int,
+    image_hw: Tuple[int, int],
+) -> torch.Tensor:
+    c, hf, wf = feature.shape
+    image_h, image_w = image_hw
+    mask_f = F.interpolate(mask.float().view(1, 1, image_h, image_w), size=(hf, wf), mode="nearest")[0, 0]
+    coords = torch.nonzero(mask_f > 0.5, as_tuple=False)
+    if coords.numel() == 0:
+        coords = torch.stack(
+            torch.meshgrid(
+                torch.arange(hf, device=feature.device), torch.arange(wf, device=feature.device), indexing="ij"
+            ),
+            dim=-1,
+        ).view(-1, 2)
+    if coords.shape[0] >= count:
+        chosen = coords[torch.randperm(coords.shape[0], device=feature.device)[:count]]
+    else:
+        idx = torch.randint(0, coords.shape[0], (count,), device=feature.device)
+        chosen = coords[idx]
+    rad_y = max(1, int(round((patch_size / max(image_h, 1)) * hf / 2)))
+    rad_x = max(1, int(round((patch_size / max(image_w, 1)) * wf / 2)))
+    pooled = []
+    for yx in chosen:
+        y = int(yx[0].item())
+        x = int(yx[1].item())
+        y0, y1 = max(0, y - rad_y), min(hf, y + rad_y + 1)
+        x0, x1 = max(0, x - rad_x), min(wf, x + rad_x + 1)
+        pooled.append(feature[:, y0:y1, x0:x1].mean(dim=(-2, -1)))
+    return F.normalize(torch.stack(pooled, dim=0), dim=-1)
 
 
 def estimate_water_like_mask(pre_image: torch.Tensor, road_mask: torch.Tensor) -> torch.Tensor:
