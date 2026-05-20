@@ -32,6 +32,8 @@ sam3:
   prompt: flooded road
   device: cuda
   allow_mock: false
+  install_url: git+https://github.com/facebookresearch/sam3.git
+  requires_hf_auth: true
 
 deeplab:
   epochs: 100

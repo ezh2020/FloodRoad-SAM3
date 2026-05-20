@@ -77,6 +77,9 @@ class SAM3Adapter(nn.Module):
         self.model_type = model_type
         self.device_name = str(device)
         self.allow_mock = allow_mock
+        self.processor = None
+        self.official_backend = False
+        self.processor_resolution = 1008
         self.model = self._build_model()
 
     def _build_model(self) -> nn.Module:
@@ -87,6 +90,8 @@ class SAM3Adapter(nn.Module):
         candidates = []
         if self.backend in {"auto", "sam3"}:
             candidates.extend([
+                ("sam3", "build_sam3_image_model"),
+                ("sam3.model_builder", "build_sam3_image_model"),
                 ("sam3", "build_sam3"),
                 ("segment_anything_3", "build_sam3"),
                 ("segment_anything_3", "sam_model_registry"),
@@ -102,6 +107,22 @@ class SAM3Adapter(nn.Module):
                     if self.model_type is None:
                         raise SAM3IntegrationError("sam_model_registry requires sam3.model_type in config")
                     return attr[self.model_type](checkpoint=self.checkpoint)
+                if attr_name == "build_sam3_image_model":
+                    self.official_backend = True
+                    model = attr(
+                        device=self.device_name,
+                        checkpoint_path=self.checkpoint,
+                        load_from_HF=self.checkpoint is None,
+                        eval_mode=True,
+                    )
+                    processor_mod = importlib.import_module("sam3.model.sam3_image_processor")
+                    self.processor = processor_mod.Sam3Processor(
+                        model,
+                        resolution=self.processor_resolution,
+                        device=self.device_name,
+                        confidence_threshold=0.0,
+                    )
+                    return model
                 try:
                     return attr(checkpoint=self.checkpoint, model_type=self.model_type)
                 except TypeError:
@@ -121,12 +142,23 @@ class SAM3Adapter(nn.Module):
 
     @property
     def image_encoder(self) -> nn.Module:
+        if self.official_backend and hasattr(self.model, "backbone"):
+            return self.model.backbone.vision_backbone
         for name in ["image_encoder", "vision_encoder", "encoder"]:
             if hasattr(self.model, name):
                 return getattr(self.model, name)
         return self.model
 
     def encode_image(self, image: torch.Tensor) -> torch.Tensor:
+        if self.official_backend and hasattr(self.model, "backbone"):
+            image = self._official_transform_tensor(image)
+            out = self.model.backbone.forward_image(image)
+            features = out.get("vision_features")
+            if features is None and out.get("backbone_fpn"):
+                features = out["backbone_fpn"][-1]
+            if features is None:
+                raise SAM3IntegrationError("Official SAM3 backbone output has no vision_features/backbone_fpn.")
+            return features
         if hasattr(self.model, "encode_image"):
             return self.model.encode_image(image)
         if hasattr(self.model, "image_encoder"):
@@ -138,6 +170,18 @@ class SAM3Adapter(nn.Module):
         raise SAM3IntegrationError("SAM3 backend does not expose an image encoder.")
 
     def encode_text(self, text: str | List[str], device: torch.device) -> torch.Tensor:
+        if self.official_backend and hasattr(self.model, "backbone"):
+            texts = [text] if isinstance(text, str) else text
+            out = self.model.backbone.forward_text(texts, device=device)
+            embeds = out.get("language_embeds")
+            features = out.get("language_features")
+            if embeds is not None:
+                pooled = embeds.mean(dim=0)
+            elif features is not None:
+                pooled = features.mean(dim=0)
+            else:
+                raise SAM3IntegrationError("Official SAM3 text output has no language embeddings/features.")
+            return F.normalize(pooled.float(), dim=-1)
         if hasattr(self.model, "encode_text"):
             emb = self.model.encode_text(text)
             return emb if torch.is_tensor(emb) else torch.as_tensor(emb, device=device)
@@ -183,6 +227,8 @@ class SAM3Adapter(nn.Module):
         raise SAM3IntegrationError("SAM3 backend does not expose a compatible mask decoder.")
 
     def text_prompt_predict(self, image: torch.Tensor, prompt: str) -> SAM3Output:
+        if self.official_backend and self.processor is not None:
+            return self._official_text_prompt_predict(image, prompt)
         if hasattr(self.model, "predict"):
             out = self.model.predict(image=image, text=prompt)
             return normalize_sam_output(out, image.shape[-2:])
@@ -195,6 +241,61 @@ class SAM3Adapter(nn.Module):
         features = self.encode_image(image)
         logits = self.decode_mask(features, image.shape[-2:])
         return SAM3Output(logits=logits, features=features)
+
+    def _official_transform_tensor(self, image: torch.Tensor) -> torch.Tensor:
+        """Transform Bx3xHxW RGB in [0,1] or normalized floats to SAM3 input."""
+        if image.ndim != 4 or image.shape[1] != 3:
+            raise SAM3IntegrationError("Official SAM3 expects image tensor shaped Bx3xHxW.")
+        x = image.float()
+        if x.min() < -0.1 or x.max() > 1.5:
+            # Inverse ImageNet normalization used by FloodRoadDataset.
+            mean = torch.tensor([0.485, 0.456, 0.406], device=x.device, dtype=x.dtype).view(1, 3, 1, 1)
+            std = torch.tensor([0.229, 0.224, 0.225], device=x.device, dtype=x.dtype).view(1, 3, 1, 1)
+            x = x * std + mean
+        x = x.clamp(0, 1)
+        x = F.interpolate(x, size=(self.processor_resolution, self.processor_resolution), mode="bilinear", align_corners=False)
+        return (x - 0.5) / 0.5
+
+    @torch.inference_mode()
+    def _official_text_prompt_predict(self, image: torch.Tensor, prompt: str) -> SAM3Output:
+        from PIL import Image
+        import numpy as np
+
+        masks, scores = [], []
+        for img in image.detach().cpu():
+            rgb = img.float()
+            if rgb.min() < -0.1 or rgb.max() > 1.5:
+                mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+                std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+                rgb = rgb * std + mean
+            rgb = (rgb.clamp(0, 1).permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+            pil = Image.fromarray(rgb)
+            state = self.processor.set_image(pil)
+            out = self.processor.set_text_prompt(prompt=prompt, state=state)
+            out_masks = out.get("masks_logits")
+            if out_masks is None:
+                out_masks = out.get("masks")
+            out_scores = out.get("scores")
+            if out_masks is None or out_masks.numel() == 0:
+                mask = torch.zeros((1, image.shape[-2], image.shape[-1]), device=image.device)
+                score = torch.tensor(0.0, device=image.device)
+            else:
+                if out_scores is not None and out_scores.numel() > 0:
+                    idx = int(out_scores.detach().float().argmax().item())
+                else:
+                    idx = 0
+                mask = out_masks[idx].float().to(image.device)
+                if mask.ndim == 2:
+                    mask = mask.unsqueeze(0)
+                score = out_scores[idx].float().to(image.device) if out_scores is not None and out_scores.numel() > 0 else torch.tensor(1.0, device=image.device)
+            masks.append(mask)
+            scores.append(score)
+        logits = torch.stack(masks, dim=0)
+        if logits.shape[1] != 1:
+            logits = logits[:, :1]
+        # The processor returns probabilities/logits after sigmoid interpolation; convert probabilities to logits.
+        logits = torch.logit(logits.clamp(1e-4, 1 - 1e-4))
+        return SAM3Output(logits=logits, masks=(logits.sigmoid() > 0.5), scores=torch.stack(scores))
 
     def forward(self, image: torch.Tensor, prompt: str = "flooded road") -> SAM3Output:
         return self.text_prompt_predict(image, prompt)

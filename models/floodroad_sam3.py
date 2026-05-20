@@ -57,8 +57,8 @@ class FloodRoadSAM3(nn.Module):
         return lora_parameters(self.sam)
 
     def forward_segmentation(self, batch: Dict) -> Tuple[torch.Tensor, Dict]:
-        post = batch["post"]
-        pre = batch["pre"]
+        post = batch.get("post_raw", batch["post"])
+        pre = batch.get("pre_raw", batch["pre"])
         road_mask = batch["road_mask"]
         road_buffer = batch["road_buffer"]
         features = self.sam.encode_image(post)
