@@ -37,12 +37,72 @@ def parse_args() -> argparse.Namespace:
 
 
 def find_location_root(raw_root: Path, location: str) -> Path:
-    candidates = [raw_root / location]
+    """Find the extracted SpaceNet 8 location root.
+
+    Public SN8 tarballs are not perfectly consistent about their top-level
+    folder. Some extract into ``raw_root/location/...`` while others place the
+    location files directly under ``raw_root`` or add an extra nesting layer.
+    Prefer a directory that contains the official mapping/reference CSV files
+    and both PRE/POST event image folders, but search ancestors of discovered
+    CSVs too so all released layouts are accepted.
+    """
+    raw_root = raw_root.resolve()
+    candidates: List[Path] = [raw_root, raw_root / location]
     candidates.extend(raw_root.glob(f"**/{location}"))
+
+    marker_files = list(raw_root.rglob("*_label_image_mapping.csv")) + list(raw_root.rglob("*_reference.csv"))
+    for marker in marker_files:
+        current = marker.parent
+        while True:
+            candidates.append(current)
+            if current == raw_root or raw_root not in current.parents:
+                break
+            current = current.parent
+
+    seen = set()
+    unique_candidates = []
     for candidate in candidates:
-        if (candidate / "PRE-event").exists() and (candidate / "POST-event").exists():
-            return candidate
+        try:
+            key = candidate.resolve()
+        except FileNotFoundError:
+            continue
+        if key not in seen:
+            seen.add(key)
+            unique_candidates.append(candidate)
+
+    for candidate in unique_candidates:
+        if find_event_dir(candidate, "PRE-event") and find_event_dir(candidate, "POST-event"):
+            if find_first(candidate, "*_label_image_mapping.csv") and find_first(candidate, "*_reference.csv"):
+                return candidate
     raise FileNotFoundError(f"Could not find extracted SpaceNet 8 location {location!r} under {raw_root}")
+
+
+def find_event_dir(root: Path, name: str) -> Optional[Path]:
+    direct = root / name
+    if direct.exists():
+        return direct
+    target = name.lower()
+    for candidate in root.rglob("*"):
+        if candidate.is_dir() and candidate.name.lower() == target:
+            return candidate
+    return None
+
+
+def find_first(root: Path, pattern: str) -> Optional[Path]:
+    direct = sorted(root.glob(pattern))
+    if direct:
+        return direct[0]
+    nested = sorted(root.rglob(pattern))
+    return nested[0] if nested else None
+
+
+def resolve_image_path(event_dir: Path, image_name: str) -> Optional[Path]:
+    candidates = [event_dir / image_name, event_dir / Path(image_name).name]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    matches = sorted(event_dir.rglob(Path(image_name).name))
+    return matches[0] if matches else None
 
 
 def read_csv(path: Path) -> List[Dict[str, str]]:
@@ -139,7 +199,14 @@ def crop_with_pad(arr: np.ndarray, x: int, y: int, size: int, fill: int = 0) -> 
     return out
 
 
-def process_record(row: Dict[str, str], loc_root: Path, processed_root: Path, refs_by_image: Dict[str, List[Dict[str, str]]], cfg: Dict) -> List[Dict]:
+def process_record(
+    row: Dict[str, str],
+    pre_dir: Path,
+    post_dir: Path,
+    processed_root: Path,
+    refs_by_image: Dict[str, List[Dict[str, str]]],
+    cfg: Dict,
+) -> List[Dict]:
     data_cfg = cfg["data"]
     tile_size = int(data_cfg["tile_size"])
     overlap = int(data_cfg["overlap"])
@@ -148,9 +215,9 @@ def process_record(row: Dict[str, str], loc_root: Path, processed_root: Path, re
     post_name = row.get("post-event image 1") or row.get("post-event image 2")
     if not post_name:
         return []
-    pre_path = loc_root / "PRE-event" / pre_name
-    post_path = loc_root / "POST-event" / post_name
-    if not pre_path.exists() or not post_path.exists():
+    pre_path = resolve_image_path(pre_dir, pre_name)
+    post_path = resolve_image_path(post_dir, post_name)
+    if pre_path is None or post_path is None:
         return []
     pre = read_rgb(pre_path)
     post = read_rgb(post_path)
@@ -205,9 +272,20 @@ def main() -> None:
     cfg = load_config(args.config)
     seed = int(cfg["data"].get("split_seed", 42))
     loc_root = find_location_root(Path(args.raw_root), args.location)
+    pre_dir = find_event_dir(loc_root, "PRE-event")
+    post_dir = find_event_dir(loc_root, "POST-event")
+    if pre_dir is None or post_dir is None:
+        raise FileNotFoundError(f"Could not find PRE-event/POST-event folders under {loc_root}")
     processed_root = ensure_dir(args.processed_root)
-    mapping_path = next(loc_root.glob("*_label_image_mapping.csv"))
-    reference_path = next(loc_root.glob("*_reference.csv"))
+    mapping_path = find_first(loc_root, "*_label_image_mapping.csv")
+    reference_path = find_first(loc_root, "*_reference.csv")
+    if mapping_path is None or reference_path is None:
+        raise FileNotFoundError(f"Could not find SpaceNet 8 mapping/reference CSV files under {loc_root}")
+    print(f"SN8 root: {loc_root}", flush=True)
+    print(f"PRE-event dir: {pre_dir}", flush=True)
+    print(f"POST-event dir: {post_dir}", flush=True)
+    print(f"Mapping CSV: {mapping_path}", flush=True)
+    print(f"Reference CSV: {reference_path}", flush=True)
     mapping_rows = read_csv(mapping_path)
     reference_rows = read_csv(reference_path)
     road_refs: Dict[str, List[Dict[str, str]]] = {}
@@ -218,7 +296,7 @@ def main() -> None:
 
     all_rows: List[Dict] = []
     for row in tqdm(mapping_rows, desc=f"SN8 {args.location}"):
-        all_rows.extend(process_record(row, loc_root, processed_root, road_refs, cfg))
+        all_rows.extend(process_record(row, pre_dir, post_dir, processed_root, road_refs, cfg))
     if not all_rows:
         raise RuntimeError("No usable SpaceNet 8 tiles were produced.")
 
