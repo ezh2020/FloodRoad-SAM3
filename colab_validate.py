@@ -120,7 +120,10 @@ def select_sn8_tarball() -> str:
 def pip_install(args: list[str]) -> None:
     env = os.environ.copy()
     env.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
-    run([sys.executable, "-m", "pip", "install", *args], env=env)
+    cmd = [sys.executable, "-m", "pip", "install"]
+    if "--no-warn-conflicts" not in args:
+        cmd.append("--no-warn-conflicts")
+    run([*cmd, *args], env=env)
 
 
 def ensure_sam3_installed(install_url: str, skip_install: bool) -> bool:
