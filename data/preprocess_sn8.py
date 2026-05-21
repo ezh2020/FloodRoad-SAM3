@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import cv2
-import networkx as nx
 import numpy as np
 import rasterio
 from rasterio.windows import Window
@@ -249,7 +248,7 @@ def process_record(
         }
         graph_path = tile_dir / "graph.json"
         with open(graph_path, "w", encoding="utf-8") as f:
-            json.dump(nx.node_link_data(graph), f, ensure_ascii=True)
+            json.dump(graph, f, ensure_ascii=True)
         rows.append(
             {
                 "id": tile_id,

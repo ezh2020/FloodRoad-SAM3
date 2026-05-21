@@ -76,3 +76,4 @@ print("deps ok", numpy.__version__, rasterio.__version__, cv2.__version__)
 - The formal run should use the real SpaceNet 8 data path and not toy data.
 - If `/content/spacenet8/raw` is missing, do not pass `--skip-download`; the runner must download the SpaceNet tarball again.
 - If `/content/spacenet8/raw` already exists and only code changed, use `--skip-download` to reuse the downloaded tarball.
+- When a GitHub-hosted Colab notebook fails because of repository code, fix the source notebook or Python files in this repo and push the fix to GitHub. Do not rely on temporary Colab patch cells as the final solution, because the notebook is expected to run from scratch in a fresh runtime.
