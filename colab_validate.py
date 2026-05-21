@@ -149,12 +149,16 @@ def pip_install(args: list[str]) -> None:
 
 def ensure_sam3_installed(install_url: str, skip_install: bool) -> bool:
     print("\n===== SAM3 package install =====", flush=True)
-    probe = run_python("import sam3; print('sam3 import ok')", check=False, capture=True)
+    probe = subprocess.run(
+        [sys.executable, "-c", "import sam3; print('sam3 import ok')"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
     if probe.returncode == 0:
+        print(probe.stdout, end="", flush=True)
         return False
-    print("Initial sam3 import failed; installing official package.", flush=True)
-    if probe.stderr:
-        print(probe.stderr, flush=True)
+    print("sam3 is not installed in the active venv; installing official package.", flush=True)
     if skip_install:
         raise RuntimeError("SAM3 is not importable and --skip-sam3-install was requested.")
     pip_install(["-q", install_url])
