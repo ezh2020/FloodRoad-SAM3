@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -59,6 +60,16 @@ def run_python(code: str, *, check: bool = True, capture: bool = False) -> subpr
     return run([sys.executable, "-c", code], check=check, capture=capture)
 
 
+def aws_command() -> list[str] | None:
+    venv_aws = Path(sys.executable).resolve().parent / "aws"
+    if venv_aws.exists():
+        return [str(venv_aws)]
+    system_aws = shutil.which("aws")
+    if system_aws:
+        return [system_aws]
+    return None
+
+
 def ensure_gpu() -> dict[str, Any]:
     print("===== GPU =====", flush=True)
     print("Python executable:", sys.executable, flush=True)
@@ -88,11 +99,21 @@ if not info["cuda_available"]:
 
 
 def list_sn8_tarballs() -> str:
-    result = run(["aws", "s3", "ls", SN8_TARBALL_PREFIX, "--no-sign-request"], capture=True, check=False)
+    cmd = aws_command()
+    if cmd is None:
+        print("aws command was not found; installing awscli into the active Python environment.", flush=True)
+        pip_install(["-q", "awscli"])
+        cmd = aws_command()
+    if cmd is None:
+        raise RuntimeError(f"awscli installed, but no aws executable was found next to {sys.executable}")
+    result = run([*cmd, "s3", "ls", SN8_TARBALL_PREFIX, "--no-sign-request"], capture=True, check=False)
     if result.returncode != 0:
         print("awscli failed; reinstalling awscli and retrying.", flush=True)
         run([sys.executable, "-m", "pip", "install", "-q", "awscli"])
-        result = run(["aws", "s3", "ls", SN8_TARBALL_PREFIX, "--no-sign-request"], capture=True)
+        cmd = aws_command()
+        if cmd is None:
+            raise RuntimeError(f"awscli reinstall finished, but no aws executable was found next to {sys.executable}")
+        result = run([*cmd, "s3", "ls", SN8_TARBALL_PREFIX, "--no-sign-request"], capture=True)
     return result.stdout
 
 
