@@ -77,3 +77,5 @@ print("deps ok", numpy.__version__, rasterio.__version__, cv2.__version__)
 - If `/content/spacenet8/raw` is missing, do not pass `--skip-download`; the runner must download the SpaceNet tarball again.
 - If `/content/spacenet8/raw` already exists and only code changed, use `--skip-download` to reuse the downloaded tarball.
 - When a GitHub-hosted Colab notebook fails because of repository code, fix the source notebook or Python files in this repo and push the fix to GitHub. Do not rely on temporary Colab patch cells as the final solution, because the notebook is expected to run from scratch in a fresh runtime.
+- On A100-SXM4-40GB, DeepLabV3 with `tile_size=1024` and `batch_size=4` completed 100 epochs on the 32-record SN8 subset; a T4 OOM at that point is a hardware/config limit, not the graph preprocessing bug.
+- Official SAM3's image backbone can raise `ValueError: Expected grad to be disabled.` from fused kernels. Treat official SAM3 image/text encoding as a frozen no-grad feature extractor inside training loops, then train FloodRoad heads/policy on the resulting features.

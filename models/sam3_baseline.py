@@ -140,6 +140,12 @@ class SAM3Adapter(nn.Module):
             "For pipeline smoke tests only set sam3.allow_mock=true. Tried:\n" + joined
         )
 
+    def train(self, mode: bool = True) -> "SAM3Adapter":
+        super().train(mode)
+        if self.official_backend:
+            self.model.eval()
+        return self
+
     @property
     def image_encoder(self) -> nn.Module:
         if self.official_backend and hasattr(self.model, "backbone"):
@@ -151,8 +157,12 @@ class SAM3Adapter(nn.Module):
 
     def encode_image(self, image: torch.Tensor) -> torch.Tensor:
         if self.official_backend and hasattr(self.model, "backbone"):
-            image = self._official_transform_tensor(image)
-            out = self.model.backbone.forward_image(image)
+            # Official SAM3 uses fused inference kernels in the image trunk that
+            # assert autograd is disabled, even when the surrounding FloodRoad
+            # training loop is computing gradients for policy/head modules.
+            with torch.no_grad():
+                image = self._official_transform_tensor(image)
+                out = self.model.backbone.forward_image(image)
             features = out.get("vision_features")
             if features is None and out.get("backbone_fpn"):
                 features = out["backbone_fpn"][-1]
@@ -172,16 +182,17 @@ class SAM3Adapter(nn.Module):
     def encode_text(self, text: str | List[str], device: torch.device) -> torch.Tensor:
         if self.official_backend and hasattr(self.model, "backbone"):
             texts = [text] if isinstance(text, str) else text
-            out = self.model.backbone.forward_text(texts, device=device)
-            embeds = out.get("language_embeds")
-            features = out.get("language_features")
-            if embeds is not None:
-                pooled = embeds.mean(dim=0)
-            elif features is not None:
-                pooled = features.mean(dim=0)
-            else:
-                raise SAM3IntegrationError("Official SAM3 text output has no language embeddings/features.")
-            return F.normalize(pooled.float(), dim=-1)
+            with torch.no_grad():
+                out = self.model.backbone.forward_text(texts, device=device)
+                embeds = out.get("language_embeds")
+                features = out.get("language_features")
+                if embeds is not None:
+                    pooled = embeds.mean(dim=0)
+                elif features is not None:
+                    pooled = features.mean(dim=0)
+                else:
+                    raise SAM3IntegrationError("Official SAM3 text output has no language embeddings/features.")
+                return F.normalize(pooled.float(), dim=-1)
         if hasattr(self.model, "encode_text"):
             emb = self.model.encode_text(text)
             return emb if torch.is_tensor(emb) else torch.as_tensor(emb, device=device)
