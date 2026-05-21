@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -162,13 +163,14 @@ class SAM3Adapter(nn.Module):
             # training loop is computing gradients for policy/head modules.
             with torch.no_grad():
                 image = self._official_transform_tensor(image)
-                out = self.model.backbone.forward_image(image)
+                with self._official_autocast(image.device):
+                    out = self.model.backbone.forward_image(image)
             features = out.get("vision_features")
             if features is None and out.get("backbone_fpn"):
                 features = out["backbone_fpn"][-1]
             if features is None:
                 raise SAM3IntegrationError("Official SAM3 backbone output has no vision_features/backbone_fpn.")
-            return features
+            return features.float()
         if hasattr(self.model, "encode_image"):
             return self.model.encode_image(image)
         if hasattr(self.model, "image_encoder"):
@@ -183,7 +185,8 @@ class SAM3Adapter(nn.Module):
         if self.official_backend and hasattr(self.model, "backbone"):
             texts = [text] if isinstance(text, str) else text
             with torch.no_grad():
-                out = self.model.backbone.forward_text(texts, device=device)
+                with self._official_autocast(device):
+                    out = self.model.backbone.forward_text(texts, device=device)
                 embeds = out.get("language_embeds")
                 features = out.get("language_features")
                 if embeds is not None:
@@ -267,6 +270,14 @@ class SAM3Adapter(nn.Module):
         x = F.interpolate(x, size=(self.processor_resolution, self.processor_resolution), mode="bilinear", align_corners=False)
         return (x - 0.5) / 0.5
 
+    def _official_autocast(self, device: torch.device | str):
+        device = torch.device(device)
+        if device.type != "cuda" or not torch.cuda.is_available():
+            return nullcontext()
+        bf16_supported = getattr(torch.cuda, "is_bf16_supported", lambda: False)()
+        dtype = torch.bfloat16 if bf16_supported else torch.float16
+        return torch.autocast(device_type="cuda", dtype=dtype)
+
     @torch.inference_mode()
     def _official_text_prompt_predict(self, image: torch.Tensor, prompt: str) -> SAM3Output:
         from PIL import Image
@@ -281,8 +292,9 @@ class SAM3Adapter(nn.Module):
                 rgb = rgb * std + mean
             rgb = (rgb.clamp(0, 1).permute(1, 2, 0).numpy() * 255).astype(np.uint8)
             pil = Image.fromarray(rgb)
-            state = self.processor.set_image(pil)
-            out = self.processor.set_text_prompt(prompt=prompt, state=state)
+            with self._official_autocast(image.device):
+                state = self.processor.set_image(pil)
+                out = self.processor.set_text_prompt(prompt=prompt, state=state)
             out_masks = out.get("masks_logits")
             if out_masks is None:
                 out_masks = out.get("masks")

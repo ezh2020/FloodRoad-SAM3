@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 import yaml
@@ -26,6 +27,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-ours-no-tm", action="store_true")
     parser.add_argument("--skip-ours-tm", action="store_true")
     parser.add_argument("--skip-sam3-install", action="store_true")
+    parser.add_argument(
+        "--deeplab-checkpoint-url",
+        default=None,
+        help="Optional URL for a pretrained deeplab.pt. If set, download it and skip DeepLab training.",
+    )
+    parser.add_argument(
+        "--force-deeplab-checkpoint-download",
+        action="store_true",
+        help="Redownload --deeplab-checkpoint-url even when checkpoints/deeplab.pt already exists.",
+    )
     parser.add_argument("--download-prefix", default="spacenet/SN8_floods/")
     parser.add_argument("--sn8-location", default="Louisiana-East_Training_Public")
     parser.add_argument("--sn8-tarball", default="Louisiana-East_Training_Public.tar.gz")
@@ -118,6 +129,47 @@ def raw_data_exists(raw_root: str) -> bool:
     return root.exists() and any(root.rglob("*.tif")) and (any(root.rglob("*.geojson")) or any(root.rglob("*_reference.csv")))
 
 
+def deeplab_checkpoint_path(output_dir: str) -> Path:
+    return Path(output_dir) / "checkpoints" / "deeplab.pt"
+
+
+def checkpoint_exists(path: Path) -> bool:
+    return path.exists() and path.stat().st_size > 0
+
+
+def download_deeplab_checkpoint(url: str, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = destination.with_suffix(destination.suffix + ".download")
+    if tmp_path.exists():
+        tmp_path.unlink()
+    if "drive.google.com" in url:
+        try:
+            import gdown  # noqa: F401
+        except Exception:
+            run([sys.executable, "-m", "pip", "install", "-q", "gdown"])
+        run([sys.executable, "-m", "gdown", "--fuzzy", url, "-O", str(tmp_path)])
+    else:
+        print(f"Downloading DeepLab checkpoint from {url} to {tmp_path}", flush=True)
+        urllib.request.urlretrieve(url, tmp_path)
+    if not checkpoint_exists(tmp_path):
+        raise RuntimeError(f"Downloaded checkpoint is missing or empty: {tmp_path}")
+    tmp_path.replace(destination)
+    print(f"DeepLab checkpoint ready: {destination}", flush=True)
+
+
+def ensure_deeplab_checkpoint(args: argparse.Namespace) -> bool:
+    url = args.deeplab_checkpoint_url or os.environ.get("DEEPLAB_CHECKPOINT_URL") or ""
+    url = url.strip()
+    if not url:
+        return False
+    destination = deeplab_checkpoint_path(args.output_dir)
+    if checkpoint_exists(destination) and not args.force_deeplab_checkpoint_download:
+        print(f"Found existing DeepLab checkpoint at {destination}; using it.", flush=True)
+    else:
+        download_deeplab_checkpoint(url, destination)
+    return True
+
+
 def ensure_data(args: argparse.Namespace, config_path: Path) -> None:
     if processed_manifest_exists(args.processed_root):
         print(f"Found processed manifest under {args.processed_root}; reusing it.", flush=True)
@@ -173,9 +225,12 @@ def main() -> None:
     if not args.skip_sam3_install:
         install_sam3(cfg)
     ensure_hf_auth()
+    deeplab_checkpoint_ready = ensure_deeplab_checkpoint(args)
     ensure_data(args, runtime_config)
 
-    if not args.skip_deeplab:
+    if deeplab_checkpoint_ready:
+        print("DeepLab checkpoint URL was provided; skipping DeepLab training.", flush=True)
+    elif not args.skip_deeplab:
         run([sys.executable, "train.py", "--config", str(runtime_config), "--method", "deeplab"])
     if not args.skip_ours_no_tm:
         run([sys.executable, "train.py", "--config", str(runtime_config), "--method", "ours_no_tm"])
