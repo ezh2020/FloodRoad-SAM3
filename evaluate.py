@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import random
 import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -65,10 +64,8 @@ def sample_ids_for_eval(cfg: Dict, output_dir: Path, use_rl_samples: bool) -> Op
         manifest = Path(cfg["paths"]["processed_root"]) / "manifest.jsonl"
         rows = [r for r in read_jsonl(manifest) if r.get("split") == "train"]
         limit = int(cfg["data"].get("rl_sample_limit", 20))
-        rng = random.Random(int(cfg["data"].get("split_seed", 42)))
-        rng.shuffle(rows)
         ids = [r["id"] for r in rows[:limit]]
-        save_json(sample_path, {"ids": ids, "note": "Generated for requested RL-sample evaluation subset."})
+        save_json(sample_path, {"ids": ids, "note": "First train-split tiles generated for requested RL-sample evaluation subset."})
         return ids
     with open(sample_path, "r", encoding="utf-8") as f:
         return json.load(f)["ids"]
@@ -152,7 +149,7 @@ def evaluate_accuracy(method: str, model, loader: DataLoader, cfg: Dict, device:
     pixel_metrics = f1_iou_precision_recall(pixel_total)
     segment_metrics = f1_iou_precision_recall(segment_total)
     return {
-        "Method": display_name(method, table="accuracy"),
+        "Method": display_name_for_cfg(method, cfg, table="accuracy"),
         "Pixel F1": format_metric(pixel_metrics["Pixel F1"]),
         "Pixel IoU": format_metric(pixel_metrics["Pixel IoU"]),
         "Segment-F1": format_metric(segment_metrics["Pixel F1"]),
@@ -190,7 +187,7 @@ def measure_efficiency(method: str, model, loader: DataLoader, cfg: Dict, device
 
     flops = estimate_flops(method, model, batch, device)
     return {
-        "Method": display_name(method, table="efficiency"),
+        "Method": display_name_for_cfg(method, cfg, table="efficiency"),
         "Inference time (ms)": f"{elapsed * 1000.0 / max(iterations, 1):.3f}",
         "FLOPs (G)": flops,
         "Peak VRAM (GB)": peak_gb,
@@ -223,6 +220,16 @@ def display_name(method: str, table: str = "accuracy") -> str:
         "ours_no_tm": "Ours-noTM",
         "ours_tm": "FloodRoad-SAM3 (Ours)",
     }[method]
+
+
+def display_name_for_cfg(method: str, cfg: Dict, table: str = "accuracy") -> str:
+    name = display_name(method, table=table)
+    if method == "deeplab":
+        source_domain = cfg.get("deeplab", {}).get("source_domain")
+        if source_domain:
+            short = str(source_domain).replace("_Training_Public", "").replace("_", " ")
+            name = f"{name} ({short}-trained)"
+    return name
 
 
 def write_outputs(output_dir: Path, name: str, rows: List[Dict[str, object]], columns: List[str]) -> None:

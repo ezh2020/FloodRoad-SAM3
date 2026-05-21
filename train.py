@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import random
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -62,11 +61,9 @@ def select_rl_sample_ids(cfg: Dict, output_dir: Path) -> List[str]:
     manifest = Path(cfg["paths"]["processed_root"]) / "manifest.jsonl"
     rows = [r for r in read_jsonl(manifest) if r.get("split") == "train"]
     limit = int(cfg["data"].get("rl_sample_limit", 20))
-    rng = random.Random(int(cfg["data"].get("split_seed", 42)))
-    rng.shuffle(rows)
     ids = [r["id"] for r in rows[:limit]]
     ensure_dir(output_dir)
-    save_json(sample_path, {"ids": ids, "note": "Used for CC-RL training and requested evaluation subset."})
+    save_json(sample_path, {"ids": ids, "note": "First train-split tiles used for CC-RL training and requested evaluation subset."})
     return ids
 
 

@@ -41,6 +41,12 @@ class FloodRoadSAM3(nn.Module):
             text_neg=dca_cfg.get("text_neg", "road still passable"),
         )
         rgstm_cfg = ours_cfg.get("rgstm", {})
+        self.tm_encoder_resolution = None
+        if use_token_merging and bool(rgstm_cfg.get("lowres_encoder", True)):
+            token_keep_ratio = max(0.05, min(1.0, 1.0 - float(rgstm_cfg.get("merge_ratio", 0.2))))
+            default_resolution = max(16, int(round(self.sam.processor_resolution * (token_keep_ratio**0.5))))
+            self.tm_encoder_resolution = int(rgstm_cfg.get("encoder_resolution", default_resolution))
+            self.tm_encoder_resolution = max(16, (self.tm_encoder_resolution // 16) * 16)
         self.rgstm = RoadGraphTokenMerging(
             merge_ratio=float(rgstm_cfg.get("merge_ratio", 0.2)),
             laplacian_k=int(rgstm_cfg.get("laplacian_k", 16)),
@@ -61,8 +67,9 @@ class FloodRoadSAM3(nn.Module):
         pre = batch.get("pre_raw", batch["pre"])
         road_mask = batch["road_mask"]
         road_buffer = batch["road_buffer"]
-        features = self.sam.encode_image(post)
-        pre_features = self.sam.encode_image(pre)
+        encode_resolution = self.tm_encoder_resolution if self.use_token_merging else None
+        features = self.sam.encode_image(post, resolution=encode_resolution)
+        pre_features = self.sam.encode_image(pre, resolution=encode_resolution)
         if self.use_token_merging:
             if post.shape[0] != 1:
                 raise ValueError("Token merging path expects batch size 1")

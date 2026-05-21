@@ -156,13 +156,13 @@ class SAM3Adapter(nn.Module):
                 return getattr(self.model, name)
         return self.model
 
-    def encode_image(self, image: torch.Tensor) -> torch.Tensor:
+    def encode_image(self, image: torch.Tensor, resolution: Optional[int] = None) -> torch.Tensor:
         if self.official_backend and hasattr(self.model, "backbone"):
             # Official SAM3 uses fused inference kernels in the image trunk that
             # assert autograd is disabled, even when the surrounding FloodRoad
             # training loop is computing gradients for policy/head modules.
             with torch.no_grad():
-                image = self._official_transform_tensor(image)
+                image = self._official_transform_tensor(image, resolution=resolution)
                 with self._official_autocast(image.device):
                     out = self.model.backbone.forward_image(image)
             features = out.get("vision_features")
@@ -256,10 +256,11 @@ class SAM3Adapter(nn.Module):
         logits = self.decode_mask(features, image.shape[-2:])
         return SAM3Output(logits=logits, features=features)
 
-    def _official_transform_tensor(self, image: torch.Tensor) -> torch.Tensor:
+    def _official_transform_tensor(self, image: torch.Tensor, resolution: Optional[int] = None) -> torch.Tensor:
         """Transform Bx3xHxW RGB in [0,1] or normalized floats to SAM3 input."""
         if image.ndim != 4 or image.shape[1] != 3:
             raise SAM3IntegrationError("Official SAM3 expects image tensor shaped Bx3xHxW.")
+        resolution = int(resolution or self.processor_resolution)
         x = image.float()
         if x.min() < -0.1 or x.max() > 1.5:
             # Inverse ImageNet normalization used by FloodRoadDataset.
@@ -267,7 +268,7 @@ class SAM3Adapter(nn.Module):
             std = torch.tensor([0.229, 0.224, 0.225], device=x.device, dtype=x.dtype).view(1, 3, 1, 1)
             x = x * std + mean
         x = x.clamp(0, 1)
-        x = F.interpolate(x, size=(self.processor_resolution, self.processor_resolution), mode="bilinear", align_corners=False)
+        x = F.interpolate(x, size=(resolution, resolution), mode="bilinear", align_corners=False)
         return (x - 0.5) / 0.5
 
     def _official_autocast(self, device: torch.device | str):

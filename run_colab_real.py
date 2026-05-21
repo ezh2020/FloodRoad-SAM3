@@ -37,10 +37,51 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Redownload --deeplab-checkpoint-url even when checkpoints/deeplab.pt already exists.",
     )
+    parser.add_argument(
+        "--ours-no-tm-checkpoint-url",
+        default=None,
+        help="Optional URL for a pretrained ours_no_tm.pt. If set, download it and skip Ours-noTM training.",
+    )
+    parser.add_argument(
+        "--ours-tm-checkpoint-url",
+        default=None,
+        help="Optional URL for a pretrained ours_tm.pt. If set, download it and skip Ours-TM training.",
+    )
+    parser.add_argument(
+        "--force-ours-checkpoint-download",
+        action="store_true",
+        help="Redownload provided Ours checkpoint URLs even when checkpoint files already exist.",
+    )
     parser.add_argument("--download-prefix", default="spacenet/SN8_floods/")
     parser.add_argument("--sn8-location", default="Louisiana-East_Training_Public")
     parser.add_argument("--sn8-tarball", default="Louisiana-East_Training_Public.tar.gz")
     parser.add_argument("--limit-records", type=int, default=32, help="Limit official SN8 source images while keeping real data.")
+    parser.add_argument(
+        "--deeplab-source-raw-root",
+        default=None,
+        help="Optional raw root for training DeepLab on a different source domain.",
+    )
+    parser.add_argument(
+        "--deeplab-source-processed-root",
+        default=None,
+        help="Optional processed root for training DeepLab on a different source domain.",
+    )
+    parser.add_argument(
+        "--deeplab-source-location",
+        default=None,
+        help="Optional SN8 location for source-domain DeepLab training, e.g. Germany_Training_Public.",
+    )
+    parser.add_argument(
+        "--deeplab-source-tarball",
+        default=None,
+        help="Optional SN8 tarball for source-domain DeepLab training, e.g. Germany_Training_Public.tar.gz.",
+    )
+    parser.add_argument(
+        "--deeplab-source-limit-records",
+        type=int,
+        default=None,
+        help="Optional source-domain record limit for DeepLab training. Defaults to --limit-records.",
+    )
     parser.add_argument("--deeplab-epochs", type=int, default=None)
     parser.add_argument("--ours-phase1-epochs", type=int, default=None)
     parser.add_argument("--ours-phase2-epochs", type=int, default=None)
@@ -55,6 +96,10 @@ def run(cmd: list[str], *, env: dict[str, str] | None = None) -> None:
 def load_cfg(path: str | os.PathLike[str]) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def has_deeplab_checkpoint_url(args: argparse.Namespace) -> bool:
+    return bool((args.deeplab_checkpoint_url or os.environ.get("DEEPLAB_CHECKPOINT_URL") or "").strip())
 
 
 def write_runtime_config(cfg: dict, args: argparse.Namespace) -> Path:
@@ -72,6 +117,8 @@ def write_runtime_config(cfg: dict, args: argparse.Namespace) -> Path:
     cfg["ours"] = dict(cfg.get("ours", {}))
     if args.deeplab_epochs is not None:
         cfg["deeplab"]["epochs"] = args.deeplab_epochs
+    if using_deeplab_source_domain(args) and not has_deeplab_checkpoint_url(args):
+        cfg["deeplab"]["source_domain"] = args.deeplab_source_location or "custom"
     if args.ours_phase1_epochs is not None:
         cfg["ours"]["phase1_epochs"] = args.ours_phase1_epochs
     if args.ours_phase2_epochs is not None:
@@ -80,6 +127,29 @@ def write_runtime_config(cfg: dict, args: argparse.Namespace) -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
         yaml.safe_dump(cfg, f, sort_keys=False)
+    print(out.read_text(), flush=True)
+    return out
+
+
+def write_deeplab_source_config(cfg: dict, args: argparse.Namespace) -> Path:
+    source_raw_root = args.deeplab_source_raw_root or "/content/spacenet8/deeplab_source_raw"
+    source_processed_root = args.deeplab_source_processed_root or "/content/spacenet8/deeplab_source_processed"
+    cfg = dict(cfg)
+    cfg["paths"] = dict(cfg.get("paths", {}))
+    cfg["paths"]["raw_root"] = source_raw_root
+    cfg["paths"]["processed_root"] = source_processed_root
+    cfg["paths"]["output_dir"] = args.output_dir
+    cfg["sam3"] = dict(cfg.get("sam3", {}))
+    cfg["sam3"]["allow_mock"] = False
+    cfg["sam3"]["device"] = "cuda"
+    cfg["deeplab"] = dict(cfg.get("deeplab", {}))
+    if args.deeplab_epochs is not None:
+        cfg["deeplab"]["epochs"] = args.deeplab_epochs
+    out = Path(args.output_dir) / "deeplab_source_run.yaml"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f, sort_keys=False)
+    print("DeepLab source-domain config:", flush=True)
     print(out.read_text(), flush=True)
     return out
 
@@ -130,14 +200,18 @@ def raw_data_exists(raw_root: str) -> bool:
 
 
 def deeplab_checkpoint_path(output_dir: str) -> Path:
-    return Path(output_dir) / "checkpoints" / "deeplab.pt"
+    return model_checkpoint_path(output_dir, "deeplab")
+
+
+def model_checkpoint_path(output_dir: str, method: str) -> Path:
+    return Path(output_dir) / "checkpoints" / f"{method}.pt"
 
 
 def checkpoint_exists(path: Path) -> bool:
     return path.exists() and path.stat().st_size > 0
 
 
-def download_deeplab_checkpoint(url: str, destination: Path) -> None:
+def download_checkpoint(url: str, destination: Path, label: str) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = destination.with_suffix(destination.suffix + ".download")
     if tmp_path.exists():
@@ -149,12 +223,16 @@ def download_deeplab_checkpoint(url: str, destination: Path) -> None:
             run([sys.executable, "-m", "pip", "install", "-q", "gdown"])
         run([sys.executable, "-m", "gdown", "--fuzzy", url, "-O", str(tmp_path)])
     else:
-        print(f"Downloading DeepLab checkpoint from {url} to {tmp_path}", flush=True)
+        print(f"Downloading {label} checkpoint from {url} to {tmp_path}", flush=True)
         urllib.request.urlretrieve(url, tmp_path)
     if not checkpoint_exists(tmp_path):
         raise RuntimeError(f"Downloaded checkpoint is missing or empty: {tmp_path}")
     tmp_path.replace(destination)
-    print(f"DeepLab checkpoint ready: {destination}", flush=True)
+    print(f"{label} checkpoint ready: {destination}", flush=True)
+
+
+def download_deeplab_checkpoint(url: str, destination: Path) -> None:
+    download_checkpoint(url, destination, "DeepLab")
 
 
 def ensure_deeplab_checkpoint(args: argparse.Namespace) -> bool:
@@ -167,6 +245,19 @@ def ensure_deeplab_checkpoint(args: argparse.Namespace) -> bool:
         print(f"Found existing DeepLab checkpoint at {destination}; using it.", flush=True)
     else:
         download_deeplab_checkpoint(url, destination)
+    return True
+
+
+def ensure_ours_checkpoint(args: argparse.Namespace, method: str, url_arg: str, env_name: str, label: str) -> bool:
+    url = url_arg or os.environ.get(env_name) or ""
+    url = url.strip()
+    if not url:
+        return False
+    destination = model_checkpoint_path(args.output_dir, method)
+    if checkpoint_exists(destination) and not args.force_ours_checkpoint_download:
+        print(f"Found existing {label} checkpoint at {destination}; using it.", flush=True)
+    else:
+        download_checkpoint(url, destination, label)
     return True
 
 
@@ -216,25 +307,75 @@ def ensure_data(args: argparse.Namespace, config_path: Path) -> None:
     run(cmd)
 
 
+def using_deeplab_source_domain(args: argparse.Namespace) -> bool:
+    return any(
+        value is not None
+        for value in [
+            args.deeplab_source_raw_root,
+            args.deeplab_source_processed_root,
+            args.deeplab_source_location,
+            args.deeplab_source_tarball,
+            args.deeplab_source_limit_records,
+        ]
+    )
+
+
+def ensure_deeplab_source_data(args: argparse.Namespace, config_path: Path) -> None:
+    source_args = argparse.Namespace(**vars(args))
+    source_args.raw_root = args.deeplab_source_raw_root or "/content/spacenet8/deeplab_source_raw"
+    source_args.processed_root = args.deeplab_source_processed_root or "/content/spacenet8/deeplab_source_processed"
+    source_args.sn8_location = args.deeplab_source_location or args.sn8_location
+    source_args.sn8_tarball = args.deeplab_source_tarball or args.sn8_tarball
+    source_args.limit_records = args.deeplab_source_limit_records or args.limit_records
+    print(
+        "Preparing DeepLab source domain: "
+        f"location={source_args.sn8_location} raw_root={source_args.raw_root} processed_root={source_args.processed_root}",
+        flush=True,
+    )
+    ensure_data(source_args, config_path)
+
+
 def main() -> None:
     args = parse_args()
     os.chdir(ROOT)
     cfg = load_cfg(args.config)
     runtime_config = write_runtime_config(cfg, args)
+    deeplab_source_config = write_deeplab_source_config(cfg, args) if using_deeplab_source_domain(args) else None
     ensure_gpu()
     if not args.skip_sam3_install:
         install_sam3(cfg)
     ensure_hf_auth()
     deeplab_checkpoint_ready = ensure_deeplab_checkpoint(args)
+    ours_no_tm_checkpoint_ready = ensure_ours_checkpoint(
+        args,
+        "ours_no_tm",
+        args.ours_no_tm_checkpoint_url,
+        "OURS_NO_TM_CHECKPOINT_URL",
+        "Ours-noTM",
+    )
+    ours_tm_checkpoint_ready = ensure_ours_checkpoint(
+        args,
+        "ours_tm",
+        args.ours_tm_checkpoint_url,
+        "OURS_TM_CHECKPOINT_URL",
+        "Ours-TM",
+    )
+    if deeplab_source_config is not None and not deeplab_checkpoint_ready and not args.skip_deeplab:
+        ensure_deeplab_source_data(args, deeplab_source_config)
     ensure_data(args, runtime_config)
 
     if deeplab_checkpoint_ready:
         print("DeepLab checkpoint URL was provided; skipping DeepLab training.", flush=True)
     elif not args.skip_deeplab:
-        run([sys.executable, "train.py", "--config", str(runtime_config), "--method", "deeplab"])
-    if not args.skip_ours_no_tm:
+        train_config = deeplab_source_config or runtime_config
+        run([sys.executable, "train.py", "--config", str(train_config), "--method", "deeplab"])
+    if ours_no_tm_checkpoint_ready:
+        print("Ours-noTM checkpoint URL was provided; skipping Ours-noTM training.", flush=True)
+    elif not args.skip_ours_no_tm:
         run([sys.executable, "train.py", "--config", str(runtime_config), "--method", "ours_no_tm"])
-    if not args.skip_ours_tm:
+    if ours_tm_checkpoint_ready:
+        print("Ours-TM checkpoint URL was provided; skipping Ours-TM training.", flush=True)
+    elif not args.skip_ours_tm:
         run([sys.executable, "train.py", "--config", str(runtime_config), "--method", "ours_tm"])
 
     run([sys.executable, "evaluate.py", "--config", str(runtime_config), "--skip-efficiency"])
