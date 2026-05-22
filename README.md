@@ -2,7 +2,6 @@
 
 [![在 Colab 中打开](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ezh2020/FloodRoad-SAM3/blob/main/FloodRoad_SAM3_Colab.ipynb)
 
-FloodRoad-SAM3 是面向 SpaceNet 8 洪水道路识别任务的实验代码。项目提供可直接在 Colab 运行的 Demo notebook，用于准备数据、加载 SAM3、下载已训练权重、运行推理验证，并在首页展示论文/课程设计实验所需的精度、效率和可视化结果。
 
 > 复现实验建议使用 Colab **A100 High-RAM** runtime，并在 Colab Secret 中添加 `HF_TOKEN`。该 token 需要具备 `facebook/sam3` 的 Hugging Face 访问权限。
 
