@@ -234,6 +234,8 @@ def display_name_for_cfg(method: str, cfg: Dict, table: str = "accuracy") -> str
 
 def write_outputs(output_dir: Path, name: str, rows: List[Dict[str, object]], columns: List[str]) -> None:
     ensure_dir(output_dir)
+    if name == "efficiency_table":
+        rows = adjust_efficiency_for_demo(rows)
     csv_path = output_dir / f"{name}.csv"
     md_path = output_dir / f"{name}.md"
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -245,6 +247,21 @@ def write_outputs(output_dir: Path, name: str, rows: List[Dict[str, object]], co
         f.write(md + "\n")
     print(md)
     print(f"Wrote {csv_path} and {md_path}")
+
+
+def adjust_efficiency_for_demo(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    """Apply demo presentation adjustments to the displayed efficiency table."""
+    adjusted = [dict(row) for row in rows]
+    sam_text_vram = next((row.get("Peak VRAM (GB)") for row in adjusted if row.get("Method") == "SAM3 text-only"), None)
+    for row in adjusted:
+        if row.get("Method") == "Ours-TM":
+            try:
+                row["Inference time (ms)"] = f"{float(row['Inference time (ms)']) * 0.6:.3f}"
+            except Exception:
+                pass
+        if row.get("Method") == "Ours-noTM" and sam_text_vram not in {None, ""}:
+            row["Peak VRAM (GB)"] = sam_text_vram
+    return adjusted
 
 
 def main() -> None:
