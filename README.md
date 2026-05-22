@@ -1,9 +1,8 @@
 # FloodRoad-SAM3
 
-[![在 Colab 中打开](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ezh2020/FloodRoad-SAM3/blob/main/FloodRoad_SAM3_Colab.ipynb)
+ Quick start on:[![在 Colab 中打开](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ezh2020/FloodRoad-SAM3/blob/main/FloodRoad_SAM3_Colab.ipynb)
 
-
-> 复现实验建议使用 Colab **A100 High-RAM** runtime，并在 Colab Secret 中添加 `HF_TOKEN`。该 token 需要具备 `facebook/sam3` 的 Hugging Face 访问权限。
+FloodRoad-SAM3 是面向洪水道路识别任务的方法。
 
 ## 实验结果
 
