@@ -93,6 +93,10 @@ def run(cmd: list[str], *, env: dict[str, str] | None = None) -> None:
     subprocess.run(cmd, check=True, env=env)
 
 
+def fail(message: str) -> None:
+    raise RuntimeError(message)
+
+
 def load_cfg(path: str | os.PathLike[str]) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
@@ -211,6 +215,16 @@ def checkpoint_exists(path: Path) -> bool:
     return path.exists() and path.stat().st_size > 0
 
 
+def reject_html_download(path: Path, label: str) -> None:
+    with open(path, "rb") as f:
+        head = f.read(512).lstrip().lower()
+    if head.startswith(b"<html") or head.startswith(b"<!doctype") or b"google drive" in head:
+        fail(
+            f"{label} checkpoint download looks like an HTML page instead of a PyTorch checkpoint: {path}. "
+            "Check that the Google Drive file is shared as 'Anyone with the link can view' and that the URL points directly to the .pt file."
+        )
+
+
 def download_checkpoint(url: str, destination: Path, label: str) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = destination.with_suffix(destination.suffix + ".download")
@@ -227,6 +241,7 @@ def download_checkpoint(url: str, destination: Path, label: str) -> None:
         urllib.request.urlretrieve(url, tmp_path)
     if not checkpoint_exists(tmp_path):
         raise RuntimeError(f"Downloaded checkpoint is missing or empty: {tmp_path}")
+    reject_html_download(tmp_path, label)
     tmp_path.replace(destination)
     print(f"{label} checkpoint ready: {destination}", flush=True)
 
