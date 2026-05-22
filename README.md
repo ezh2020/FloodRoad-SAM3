@@ -1,27 +1,92 @@
 # FloodRoad-SAM3
 
-Colab-friendly code for flooded-road segmentation experiments on SpaceNet 8.
+[![在 Colab 中打开](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ezh2020/FloodRoad-SAM3/blob/main/FloodRoad_SAM3_Colab.ipynb)
 
-Open the runner notebook in Colab after pushing the repo:
-[FloodRoad_SAM3_Colab.ipynb](FloodRoad_SAM3_Colab.ipynb).
+FloodRoad-SAM3 是面向 SpaceNet 8 洪水道路识别任务的实验代码。项目提供可直接在 Colab 运行的 Demo notebook，用于准备数据、加载 SAM3、下载已训练权重、运行推理验证，并在首页展示论文/课程设计实验所需的精度、效率和可视化结果。
 
-The project implements the four experiment configurations from the plan:
+> 复现实验建议使用 Colab **A100 High-RAM** runtime，并在 Colab Secret 中添加 `HF_TOKEN`。该 token 需要具备 `facebook/sam3` 的 Hugging Face 访问权限。
 
-- `deeplab`: DeepLabV3+ style supervised baseline using `torchvision.models.segmentation.deeplabv3_resnet50`.
-- `sam_text`: SAM3 text-only baseline with prompt `"flooded road"` and no training.
-- `ours_no_tm`: FloodRoad-SAM3 with DCA, road prior filtering, LoRA hooks, and CC-RL.
-- `ours_tm`: the same model with RG-STM token merging enabled.
+## Colab 入口
 
-The SAM3 wrapper is intentionally isolated in [models/sam3_baseline.py](models/sam3_baseline.py). Official SAM3 APIs have changed across releases, so the adapter tries common package layouts and fails with a clear integration message if the installed package exposes a different entry point. For smoke tests only, set `sam3.allow_mock: true`; do not use the mock backend for reported results.
+点击上方 badge，或直接打开：[FloodRoad_SAM3_Colab.ipynb](https://colab.research.google.com/github/ezh2020/FloodRoad-SAM3/blob/main/FloodRoad_SAM3_Colab.ipynb)。
 
-## Typical Colab Flow
+Notebook 会自动克隆本仓库，并默认使用以下已训练权重进行推理和验证：
+
+- DeepLabV3+：`deeplab.pt`
+- FloodRoad-SAM3 without token merging：`ours_no_tm.pt`
+- FloodRoad-SAM3 with RG-STM token merging：`ours_tm.pt`
+
+如果权重链接留空，notebook 会重新训练对应模型。
+
+## 实验结果
+
+以下结果来自 GitHub 版 `FloodRoad_SAM3_Colab.ipynb` 中的 **5. 实验结果**。验证集使用当前配置中的 20 个 RL 样本，GPU 为 NVIDIA A100-SXM4-40GB。
+
+### 精度对比
+
+| Method | Pixel F1 | Pixel IoU | Segment-F1 | Precision | Recall |
+| --- | --- | --- | --- | --- | --- |
+| DeepLabV3+ | 0.8181 | 0.6921 | 0.9608 | 0.7427 | 0.9104 |
+| SAM3 text-only | 0.0301 | 0.0153 | 0.2101 | 0.0166 | 0.1599 |
+| FloodRoad-SAM3 (Ours) | 0.9999 | 0.9997 | 0.9979 | 0.9997 | 1.0000 |
+
+### 效率对比
+
+| Method | Inference time (ms) | FLOPs (G) | Peak VRAM (GB) | GPU |
+| --- | --- | --- | --- | --- |
+| DeepLabV3+ | 24.106 | 1312.944 | 0.654 | NVIDIA A100-SXM4-40GB |
+| SAM3 text-only | 156.529 | backend-specific | 6.322 | NVIDIA A100-SXM4-40GB |
+| Ours-noTM | 435.053 | backend-specific | 6.322 | NVIDIA A100-SXM4-40GB |
+| Ours-TM | 284.115 | backend-specific | 3.610 | NVIDIA A100-SXM4-40GB |
+
+## 可视化展示
+
+以下结果来自 notebook 中的 **6. 可视化展示**，样本为 `10300100AF395C00_2_18_62_0_24`。图中展示了灾前/灾后影像、道路标注、洪水道路预测，以及不同方法在同一样本上的分割效果。
+
+![FloodRoad-SAM3 可视化结果](docs/assets/floodroad_sam3_visualization.png)
+
+### 道路级预测明细
+
+| segment_id | gt_flooded | road_pixels | DeepLabV3+ score | DeepLabV3+ pred | SAM3 text-only score | SAM3 text-only pred | Ours-noTM score | Ours-noTM pred | FloodRoad-SAM3 (Ours) score | FloodRoad-SAM3 (Ours) pred |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 4.0 | 1.0 | 214.0 | 0.9939 | 1.0 | 0.4652 | 0.0 | 0.5044 | 1.0 | 0.5045 | 1.0 |
+| 5.0 | 1.0 | 429.0 | 0.9729 | 1.0 | 0.6437 | 1.0 | 0.509 | 1.0 | 0.5097 | 1.0 |
+| 6.0 | 1.0 | 492.0 | 0.9316 | 1.0 | 0.6329 | 1.0 | 0.5043 | 1.0 | 0.5005 | 1.0 |
+| 12.0 | 1.0 | 1190.0 | 0.932 | 1.0 | 0.382 | 0.0 | 0.5184 | 1.0 | 0.5203 | 1.0 |
+| 13.0 | 1.0 | 1117.0 | 0.8695 | 1.0 | 0.3381 | 0.0 | 0.5118 | 1.0 | 0.5088 | 1.0 |
+| 14.0 | 1.0 | 1883.0 | 0.9477 | 1.0 | 0.3776 | 0.0 | 0.511 | 1.0 | 0.5055 | 1.0 |
+| 15.0 | 1.0 | 1189.0 | 0.977 | 1.0 | 0.4126 | 0.0 | 0.5151 | 1.0 | 0.5208 | 1.0 |
+| 16.0 | 1.0 | 45.0 | 0.8755 | 1.0 | 0.2944 | 0.0 | 0.512 | 1.0 | 0.5235 | 1.0 |
+| 18.0 | 1.0 | 781.0 | 0.9079 | 1.0 | 0.3704 | 0.0 | 0.4986 | 0.0 | 0.4955 | 0.0 |
+| 19.0 | 1.0 | 1575.0 | 0.9697 | 1.0 | 0.5124 | 1.0 | 0.522 | 1.0 | 0.5255 | 1.0 |
+| 20.0 | 1.0 | 304.0 | 0.9318 | 1.0 | 0.4062 | 0.0 | 0.5256 | 1.0 | 0.5247 | 1.0 |
+| 21.0 | 1.0 | 225.0 | 0.9556 | 1.0 | 0.3651 | 0.0 | 0.5307 | 1.0 | 0.5256 | 1.0 |
+| 22.0 | 1.0 | 243.0 | 0.9715 | 1.0 | 0.3335 | 0.0 | 0.5276 | 1.0 | 0.524 | 1.0 |
+| 23.0 | 1.0 | 954.0 | 0.9084 | 1.0 | 0.3684 | 0.0 | 0.524 | 1.0 | 0.5262 | 1.0 |
+| 24.0 | 1.0 | 1341.0 | 0.9699 | 1.0 | 0.3892 | 0.0 | 0.5198 | 1.0 | 0.5201 | 1.0 |
+| 25.0 | 1.0 | 1287.0 | 0.9538 | 1.0 | 0.3358 | 0.0 | 0.5133 | 1.0 | 0.5177 | 1.0 |
+| 26.0 | 1.0 | 470.0 | 0.8951 | 1.0 | 0.3588 | 0.0 | 0.517 | 1.0 | 0.5302 | 1.0 |
+| 30.0 | 1.0 | 83.0 | 0.9832 | 1.0 | 0.2981 | 0.0 | 0.5281 | 1.0 | 0.5283 | 1.0 |
+
+## 方法配置
+
+项目实现了四组实验配置：
+
+- `deeplab`：基于 `torchvision.models.segmentation.deeplabv3_resnet50` 的 DeepLabV3+ 风格监督基线。
+- `sam_text`：SAM3 text-only 基线，提示词为 `"flooded road"`，不进行训练。
+- `ours_no_tm`：带 DCA、道路先验过滤、LoRA hooks 和 CC-RL 的 FloodRoad-SAM3，不启用 token merging。
+- `ours_tm`：在 `ours_no_tm` 基础上启用 RG-STM token merging。
+
+SAM3 适配层位于 [models/sam3_baseline.py](models/sam3_baseline.py)。由于官方 SAM3 API 在不同版本中可能变化，适配层会尝试常见包结构；如果当前安装包暴露的入口不同，会给出明确的集成错误信息。仅 smoke test 可设置 `sam3.allow_mock: true`，正式报告结果不要使用 mock backend。
+
+## 典型 Colab 流程
 
 ```bash
-cd /content/floodroad-sam3
+cd /content/FloodRoad-SAM3
 pip install -r requirements.txt
 ```
 
-Prepare data from raw SpaceNet 8 files:
+从原始 SpaceNet 8 文件准备数据：
 
 ```bash
 python data/preprocess.py \
@@ -30,25 +95,25 @@ python data/preprocess.py \
   --config configs/default.yaml
 ```
 
-Train DeepLabV3+:
+训练 DeepLabV3+：
 
 ```bash
 python train.py --config configs/default.yaml --method deeplab
 ```
 
-Train FloodRoad-SAM3 without token merging:
+训练不启用 token merging 的 FloodRoad-SAM3：
 
 ```bash
 python train.py --config configs/default.yaml --method ours_no_tm
 ```
 
-Train FloodRoad-SAM3 with RG-STM:
+训练启用 RG-STM 的 FloodRoad-SAM3：
 
 ```bash
 python train.py --config configs/default.yaml --method ours_tm
 ```
 
-Evaluate accuracy on the same 20 RL tiles:
+在同一批 20 个 RL 样本上评估精度：
 
 ```bash
 python evaluate.py \
@@ -58,7 +123,7 @@ python evaluate.py \
   --skip-efficiency
 ```
 
-Run efficiency measurement later on GPU:
+在 GPU 上单独测量效率：
 
 ```bash
 python evaluate.py \
@@ -67,26 +132,26 @@ python evaluate.py \
   --efficiency-only
 ```
 
-## Data Expectations
+## 数据要求
 
-`preprocess.py` can either discover files by glob patterns from the config or read a pair manifest CSV with these columns:
+`preprocess.py` 可以通过配置中的 glob pattern 自动发现文件，也可以读取 pair manifest CSV。CSV 需要包含以下列：
 
 ```text
 id,pre_path,post_path,road_geojson_path,flood_path
 ```
 
-`flood_path` may point to a raster flood mask. If it is absent, preprocessing falls back to flooded-road attributes in the road GeoJSON when available.
+`flood_path` 可以指向栅格洪水掩膜；如果缺失，预处理会尝试从 road GeoJSON 的 flooded-road 属性中生成标注。
 
-Processed tiles are stored as `.npy` arrays and indexed by `manifest.jsonl`:
+处理后的 tiles 会以 `.npy` 数组保存，并写入 `manifest.jsonl` 索引：
 
-- pre-disaster RGB tile
-- post-disaster RGB tile
-- road mask
-- flood mask
-- flooded-road mask
-- integer segment map
-- road segment graph JSON
+- 灾前 RGB tile
+- 灾后 RGB tile
+- 道路 mask
+- 洪水 mask
+- 洪水道路 mask
+- 整数 segment map
+- 道路 segment graph JSON
 
-## Important Experiment Note
+## 实验说明
 
-The config limits the RL fine-tuning set to 20 tiles (`data.rl_sample_limit: 20`) and saves that list in the run directory as `rl_samples.json`. Evaluation can reuse exactly those 20 samples with `--use-rl-samples`, matching the current experiment plan.
+当前配置将 RL 微调样本限制为 20 个 tile（`data.rl_sample_limit: 20`），并在运行目录中保存为 `rl_samples.json`。评估时使用 `--use-rl-samples` 可复用同一批 20 个样本，与当前实验计划保持一致。
