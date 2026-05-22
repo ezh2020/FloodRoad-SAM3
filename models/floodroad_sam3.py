@@ -12,6 +12,7 @@ from .dca import DifferentialConceptAnchor
 from .lora import apply_lora, lora_parameters
 from .rgstm import RoadGraphTokenMerging
 from .sam3_baseline import SAM3Adapter, build_sam3_adapter
+from .vit_token_merging import apply_vit_token_merging
 
 
 class FloodRoadSAM3(nn.Module):
@@ -42,11 +43,30 @@ class FloodRoadSAM3(nn.Module):
         )
         rgstm_cfg = ours_cfg.get("rgstm", {})
         self.tm_encoder_resolution = None
-        if use_token_merging and bool(rgstm_cfg.get("lowres_encoder", True)):
+        if use_token_merging and bool(rgstm_cfg.get("lowres_encoder", False)):
             token_keep_ratio = max(0.05, min(1.0, 1.0 - float(rgstm_cfg.get("merge_ratio", 0.2))))
             default_resolution = max(16, int(round(self.sam.processor_resolution * (token_keep_ratio**0.5))))
             self.tm_encoder_resolution = int(rgstm_cfg.get("encoder_resolution", default_resolution))
             self.tm_encoder_resolution = max(16, (self.tm_encoder_resolution // 16) * 16)
+            if getattr(self.sam, "official_backend", False) and self.tm_encoder_resolution != self.sam.processor_resolution:
+                print(
+                    "Official SAM3 uses a fixed RoPE grid; disabling lowres_encoder "
+                    f"({self.tm_encoder_resolution}) and using {self.sam.processor_resolution}.",
+                    flush=True,
+                )
+                self.tm_encoder_resolution = None
+        self.vit_token_merge_layers: List[str] = []
+        if use_token_merging and bool(rgstm_cfg.get("vit_merge", True)):
+            self.vit_token_merge_layers = apply_vit_token_merging(
+                self.sam.image_encoder,
+                merge_ratio=float(rgstm_cfg.get("merge_ratio", 0.2)),
+                layers=rgstm_cfg.get("layers", [6, 12, 18]),
+                metric_dim=int(rgstm_cfg.get("metric_dim", 64)),
+                merge_attention=bool(rgstm_cfg.get("merge_attention", True)),
+                merge_mlp=bool(rgstm_cfg.get("merge_mlp", True)),
+            )
+            if self.vit_token_merge_layers:
+                print(f"Applied ViT token merging to {self.vit_token_merge_layers}", flush=True)
         self.rgstm = RoadGraphTokenMerging(
             merge_ratio=float(rgstm_cfg.get("merge_ratio", 0.2)),
             laplacian_k=int(rgstm_cfg.get("laplacian_k", 16)),

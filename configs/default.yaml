@@ -70,9 +70,13 @@ ours:
   rgstm:
     enabled: true
     merge_ratio: 0.2
-    lowres_encoder: true
-    encoder_resolution: 896
-    layers: [6, 12, 18]
+    lowres_encoder: false
+    encoder_resolution: 1008
+    vit_merge: true
+    merge_attention: true
+    merge_mlp: true
+    metric_dim: 64
+    layers: [7, 15, 23, 31]
     laplacian_k: 16
     preserve_weights:
       energy: 0.4
