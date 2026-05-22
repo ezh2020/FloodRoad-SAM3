@@ -1,6 +1,6 @@
 # FloodRoad-SAM3
 
- Quick start on:[![在 Colab 中打开](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ezh2020/FloodRoad-SAM3/blob/main/FloodRoad_SAM3_Colab.ipynb)
+ Quick start on:   [![在 Colab 中打开](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/ezh2020/FloodRoad-SAM3/blob/main/FloodRoad_SAM3_Colab.ipynb)
 
 FloodRoad-SAM3 是面向洪水道路识别任务的方法。
 
